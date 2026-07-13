@@ -44,7 +44,7 @@ python -m neuromod_snn.cli \
   --run_mode mod \
   --base_snn_ckpt runs/snn_best.pt \
   --ann_mode ann_sub \
-  --ann_hidden_sizes "[256]" \
+  --ann_hidden_sizes "[1024]" \
   --ann_interval 3
 ```
 
@@ -53,8 +53,8 @@ Train staged SNN then modulator:
 ```bash
 python -m neuromod_snn.cli \
   --run_mode staged \
-  --nb_epochs_snn 10 \
-  --nb_epochs_mod 20 \
+  --nb_epochs_snn 30 \
+  --nb_epochs_mod 30 \
   --ann_mode ann_sub
 ```
 
