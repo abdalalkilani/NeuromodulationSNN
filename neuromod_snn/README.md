@@ -1,6 +1,6 @@
 # `neuromod_snn`
 
-This is the compact paper-facing runner. It is based on `snn_allinone_clean.py`, but keeps only the code needed to understand and run the main paper models.
+This is the compact paper-facing runner. It is based on the code which conducted all of the experiments in the paper, but keeps only the code needed to understand and run the main paper models.
 
 For conceptual explanation, start with:
 
@@ -136,7 +136,7 @@ python -m neuromod_snn.cli \
   --base_snn_ckpt runs_shd_snn/snn_best.pt \
   --ann_mode ann_add \
   --nm_enable true \
-  --nm_counts "[4,2]"
+  --nm_counts "[2,1]"
 ```
 
 SNN additive controller:
