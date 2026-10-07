@@ -2,18 +2,6 @@
 
 Use `snn_allinone_clean.py` for paper-scale runs. The compact package in `../neuromod_snn/` is for demos and code inspection.
 
-Submitted manuscript:
-
-```text
-../../Neuromodulation_enhances_the_capability_and_efficiency_of_spiking_neural_networks_2.pdf
-```
-
-Local figure/result materials:
-
-```text
-../../Figures
-```
-
 ## Data
 
 Expected HDF5 layout:
