@@ -4,12 +4,6 @@ Code for:
 
 **Neuromodulation enhances the capability and efficiency of spiking neural networks**
 
-Submitted manuscript:
-
-```text
-../Neuromodulation_enhances_the_capability_and_efficiency_of_spiking_neural_networks_2.pdf
-```
-
 This release contains:
 
 - `neuromod_snn/`: compact readable implementation for demos and inspection.
