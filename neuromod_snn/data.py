@@ -9,6 +9,35 @@ import torch
 from .config import ExperimentConfig, device, dtype
 
 
+def labels_to_numpy(labels) -> np.ndarray:
+    try:
+        return np.asarray(labels[()], dtype=np.int64)
+    except Exception:
+        return np.asarray(labels, dtype=np.int64)
+
+
+def stratified_train_val_indices(labels, val_fraction: float, seed: int):
+    """Return deterministic train/validation indices without touching test data."""
+    if not 0.0 < float(val_fraction) < 1.0:
+        raise ValueError("val_fraction must be between 0 and 1.")
+    labels_np = labels_to_numpy(labels)
+    rng = np.random.default_rng(int(seed))
+    train_indices, val_indices = [], []
+    for label in np.unique(labels_np):
+        class_indices = np.flatnonzero(labels_np == label)
+        rng.shuffle(class_indices)
+        if len(class_indices) < 2:
+            raise ValueError(
+                f"Cannot make a stratified validation split: class {label} has fewer than 2 samples."
+            )
+        n_val = min(len(class_indices) - 1, max(1, int(round(len(class_indices) * val_fraction))))
+        val_indices.extend(class_indices[:n_val])
+        train_indices.extend(class_indices[n_val:])
+    rng.shuffle(train_indices)
+    rng.shuffle(val_indices)
+    return np.asarray(train_indices, dtype=np.int64), np.asarray(val_indices, dtype=np.int64)
+
+
 def open_h5_pair(cfg: ExperimentConfig):
     train_path = cfg.train_path
     test_path = cfg.test_path
@@ -62,9 +91,10 @@ def dense_batches_from_hdf5(
     shuffle: bool,
     max_samples: Optional[int] = None,
     augment: bool = False,
+    indices: Optional[np.ndarray] = None,
 ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
-    labels_np = np.asarray(labels, dtype=np.int64)
-    sample_index = np.arange(len(labels_np))
+    labels_np = labels_to_numpy(labels)
+    sample_index = np.asarray(indices, dtype=np.int64) if indices is not None else np.arange(len(labels_np))
     if max_samples is not None:
         sample_index = sample_index[: min(int(max_samples), len(sample_index))]
     if shuffle:

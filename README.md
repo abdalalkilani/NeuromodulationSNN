@@ -70,6 +70,8 @@ labels
 
 The demo set has 100 training samples and 40 test samples: 5 train and 2 test examples per class. It is small enough for a quick run, but it is not meant to reproduce manuscript accuracy.
 
+The runner holds out a stratified validation split from the training file (10% by default) and selects the best checkpoint by validation accuracy. Each model's selected checkpoint is evaluated on the test file after that model finishes; test metrics do not drive checkpoint selection. Set `--val_fraction` to change the held-out fraction.
+
 Full SHD data are available from Zenke Lab:
 
 ```text

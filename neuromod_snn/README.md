@@ -48,6 +48,9 @@ Training:
 - `--nb_epochs_mod`
 - `--save_dir`
 - `--base_snn_ckpt`
+- `--val_fraction` (stratified holdout from training data; default `0.1`)
+
+Checkpoint selection uses validation accuracy. Each model's selected checkpoint is evaluated on the test split after that model finishes; test metrics do not drive checkpoint selection.
 
 Modulation:
 

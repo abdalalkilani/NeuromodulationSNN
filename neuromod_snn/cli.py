@@ -1,7 +1,7 @@
 import argparse
 
 from .config import ExperimentConfig, parse_int_list, parse_pair, set_seed, str2bool
-from .data import open_h5_pair
+from .data import open_h5_pair, stratified_train_val_indices
 from .modulated import train_modulated
 from .modulation import build_modulator
 from .snn import train_snn
@@ -31,6 +31,8 @@ def build_parser():
     p.add_argument("--test_file", type=str, default="shd_test.h5")
     p.add_argument("--save_dir", type=str, default="runs")
     p.add_argument("--seed", type=int, default=123)
+    p.add_argument("--val_fraction", type=float, default=0.1,
+                   help="Fraction of the training split reserved for stratified validation and checkpoint selection.")
 
     p.add_argument("--ann_mode", choices=["ann_sub", "ann_add", "snn_add"], default="ann_sub")
     p.add_argument("--ann_hidden_sizes", type=str, default="[2048]")
@@ -82,6 +84,7 @@ def config_from_args(args) -> ExperimentConfig:
         test_file=args.test_file,
         save_dir=args.save_dir,
         seed=args.seed,
+        val_fraction=args.val_fraction,
         ann_mode=args.ann_mode,
         ann_hidden_sizes=parse_int_list(args.ann_hidden_sizes, default=[2048]),
         ann_interval=args.ann_interval,
@@ -112,16 +115,23 @@ def main(argv=None):
     cfg = config_from_args(args)
     set_seed(cfg.seed)
     x_train, y_train, x_test, y_test = open_h5_pair(cfg)
+    train_indices, val_indices = stratified_train_val_indices(y_train, cfg.val_fraction, cfg.seed)
+    print(f"[data] train={len(train_indices)} validation={len(val_indices)} test={len(y_test)}")
     if args.run_mode == "snn":
         cfg.nb_epochs = args.nb_epochs
-        train_snn(cfg, x_train, y_train, x_test, y_test)
+        train_snn(cfg, x_train, y_train, x_test, y_test,
+                  train_indices=train_indices, val_indices=val_indices)
     elif args.run_mode == "mod":
-        train_modulated(cfg, x_train, y_train, x_test, y_test)
+        train_modulated(cfg, x_train, y_train, x_test, y_test,
+                        train_indices=train_indices, val_indices=val_indices)
     elif args.run_mode == "staged":
         cfg.nb_epochs = cfg.nb_epochs_snn
-        base_state = train_snn(cfg, x_train, y_train, x_test, y_test)
+        base_state = train_snn(cfg, x_train, y_train, x_test, y_test,
+                               train_indices=train_indices, val_indices=val_indices)
         cfg.base_snn_ckpt = None
-        train_modulated(cfg, x_train, y_train, x_test, y_test, base_state=base_state, modulator=build_modulator(cfg))
+        train_modulated(cfg, x_train, y_train, x_test, y_test,
+                        base_state=base_state, modulator=build_modulator(cfg),
+                        train_indices=train_indices, val_indices=val_indices)
     else:
         raise ValueError(args.run_mode)
 

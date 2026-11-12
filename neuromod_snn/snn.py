@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .config import ExperimentConfig, MOD_PARAM_NAMES, SNN_PARAM_NAMES, device, dtype
-from .data import dense_batches_from_hdf5
+from .data import dense_batches_from_hdf5, stratified_train_val_indices
 
 
 class SurrogateSpike(torch.autograd.Function):
@@ -119,9 +119,14 @@ def spike_regularizer(spikes: torch.Tensor, cfg: ExperimentConfig) -> torch.Tens
 
 
 @torch.no_grad()
-def evaluate_snn(state, cfg: ExperimentConfig, x_data, y_data, max_samples: Optional[int] = None) -> Tuple[float, float]:
+def evaluate_snn(
+    state, cfg: ExperimentConfig, x_data, y_data,
+    max_samples: Optional[int] = None, indices: Optional[np.ndarray] = None,
+) -> Tuple[float, float]:
     losses, accs, counts = [], [], []
-    for inputs, target in dense_batches_from_hdf5(x_data, y_data, cfg, shuffle=False, max_samples=max_samples):
+    for inputs, target in dense_batches_from_hdf5(
+        x_data, y_data, cfg, shuffle=False, max_samples=max_samples, indices=indices
+    ):
         logits = run_snn(inputs, state, cfg)
         loss = F.cross_entropy(logits, target)
         acc = (logits.argmax(dim=1) == target).float().mean()
@@ -168,14 +173,23 @@ def load_snn_checkpoint(path: str, requires_grad: bool = True) -> Dict[str, nn.P
     return out
 
 
-def train_snn(cfg: ExperimentConfig, x_train, y_train, x_test=None, y_test=None):
+def train_snn(
+    cfg: ExperimentConfig, x_train, y_train, x_test=None, y_test=None,
+    *, train_indices=None, val_indices=None,
+):
+    if train_indices is None or val_indices is None:
+        train_indices, val_indices = stratified_train_val_indices(y_train, cfg.val_fraction, cfg.seed)
     state = setup_model(cfg)
     optimizer = torch.optim.Adam(trainable_state_params(state), lr=cfg.lr)
     run_dir = Path(cfg.save_dir)
     best_acc = -1.0
+    best_state = None
+    best_epoch = 0
     for epoch in range(1, cfg.nb_epochs + 1):
         losses = []
-        for inputs, target in dense_batches_from_hdf5(x_train, y_train, cfg, shuffle=True, augment=True):
+        for inputs, target in dense_batches_from_hdf5(
+            x_train, y_train, cfg, shuffle=True, augment=True, indices=train_indices
+        ):
             logits, rec = run_snn(inputs, state, cfg, return_records=True)
             loss = F.cross_entropy(logits, target) + spike_regularizer(rec["hidden_spikes"], cfg)
             optimizer.zero_grad()
@@ -183,13 +197,24 @@ def train_snn(cfg: ExperimentConfig, x_train, y_train, x_test=None, y_test=None)
             optimizer.step()
             clamp_state_(state, cfg)
             losses.append(float(loss.item()))
-        metrics = {"train_loss": float(np.mean(losses)) if losses else float("nan")}
-        if x_test is not None and y_test is not None:
-            test_loss, test_acc = evaluate_snn(state, cfg, x_test, y_test)
-            metrics.update(test_loss=test_loss, test_acc=test_acc)
-            if test_acc > best_acc:
-                best_acc = test_acc
-                save_snn_checkpoint(run_dir / "snn_best.pt", state, cfg, epoch, metrics)
+        val_loss, val_acc = evaluate_snn(state, cfg, x_train, y_train, indices=val_indices)
+        metrics = {
+            "train_loss": float(np.mean(losses)) if losses else float("nan"),
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+        }
+        if val_acc > best_acc:
+            best_acc = val_acc
+            best_epoch = epoch
+            best_state = {name: value.detach().clone() for name, value in state.items()}
+            save_snn_checkpoint(run_dir / "snn_best.pt", state, cfg, epoch, metrics)
         print(f"[snn] epoch={epoch} " + " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
     save_snn_checkpoint(run_dir / "snn_last.pt", state, cfg, cfg.nb_epochs, metrics)
+    if best_state is not None:
+        with torch.no_grad():
+            for name, value in state.items():
+                value.copy_(best_state[name])
+    if x_test is not None and y_test is not None:
+        test_loss, test_acc = evaluate_snn(state, cfg, x_test, y_test)
+        print(f"[snn] selected epoch={best_epoch} | final test loss={test_loss:.4f} | final test acc={test_acc:.4f}")
     return state

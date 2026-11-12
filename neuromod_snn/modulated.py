@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from .config import ExperimentConfig, MOD_PARAM_NAMES, device, dtype
-from .data import compress_dense_inputs, dense_batches_from_hdf5
+from .data import compress_dense_inputs, dense_batches_from_hdf5, stratified_train_val_indices
 from .modulation import ANNModulator, SNNAdditiveModulator, apply_additive, map_substitution
 from .snn import (
     clamp_state_,
@@ -103,10 +103,15 @@ def run_modulated_snn(inputs: torch.Tensor, state: Dict[str, torch.Tensor], modu
 
 
 @torch.no_grad()
-def evaluate_modulated(state, cfg: ExperimentConfig, x_data, y_data, modulator, max_samples: Optional[int] = None) -> Tuple[float, float]:
+def evaluate_modulated(
+    state, cfg: ExperimentConfig, x_data, y_data, modulator,
+    max_samples: Optional[int] = None, indices=None,
+) -> Tuple[float, float]:
     losses, accs, counts = [], [], []
     modulator.eval()
-    for inputs, target in dense_batches_from_hdf5(x_data, y_data, cfg, shuffle=False, max_samples=max_samples):
+    for inputs, target in dense_batches_from_hdf5(
+        x_data, y_data, cfg, shuffle=False, max_samples=max_samples, indices=indices
+    ):
         logits = run_modulated_snn(inputs, state, modulator, cfg)
         loss = F.cross_entropy(logits, target)
         acc = (logits.argmax(dim=1) == target).float().mean()
@@ -132,7 +137,12 @@ def save_mod_checkpoint(path: Path, state, modulator, cfg: ExperimentConfig, epo
     )
 
 
-def train_modulated(cfg: ExperimentConfig, x_train, y_train, x_test=None, y_test=None, base_state=None, modulator=None):
+def train_modulated(
+    cfg: ExperimentConfig, x_train, y_train, x_test=None, y_test=None,
+    base_state=None, modulator=None, *, train_indices=None, val_indices=None,
+):
+    if train_indices is None or val_indices is None:
+        train_indices, val_indices = stratified_train_val_indices(y_train, cfg.val_fraction, cfg.seed)
     if base_state is None:
         if not cfg.base_snn_ckpt:
             raise ValueError("modulated training needs base_state or cfg.base_snn_ckpt")
@@ -145,9 +155,14 @@ def train_modulated(cfg: ExperimentConfig, x_train, y_train, x_test=None, y_test
     optimizer = torch.optim.Adam(list(trainable_state_params(state)) + list(modulator.parameters()), lr=cfg.lr)
     run_dir = Path(cfg.save_dir)
     best_acc = -1.0
+    best_state = None
+    best_modulator_state = None
+    best_epoch = 0
     for epoch in range(1, cfg.nb_epochs_mod + 1):
         losses = []
-        for inputs, target in dense_batches_from_hdf5(x_train, y_train, cfg, shuffle=True, augment=True):
+        for inputs, target in dense_batches_from_hdf5(
+            x_train, y_train, cfg, shuffle=True, augment=True, indices=train_indices
+        ):
             logits, rec = run_modulated_snn(inputs, state, modulator, cfg, return_records=True)
             loss = F.cross_entropy(logits, target) + spike_regularizer(rec["hidden_spikes"], cfg)
             optimizer.zero_grad()
@@ -155,13 +170,30 @@ def train_modulated(cfg: ExperimentConfig, x_train, y_train, x_test=None, y_test
             optimizer.step()
             clamp_state_(state, cfg)
             losses.append(float(loss.item()))
-        metrics = {"train_loss": float(np.mean(losses)) if losses else float("nan")}
-        if x_test is not None and y_test is not None:
-            test_loss, test_acc = evaluate_modulated(state, cfg, x_test, y_test, modulator)
-            metrics.update(test_loss=test_loss, test_acc=test_acc)
-            if test_acc > best_acc:
-                best_acc = test_acc
-                save_mod_checkpoint(run_dir / "mod_best.pt", state, modulator, cfg, epoch, metrics)
+        val_loss, val_acc = evaluate_modulated(
+            state, cfg, x_train, y_train, modulator, indices=val_indices
+        )
+        metrics = {
+            "train_loss": float(np.mean(losses)) if losses else float("nan"),
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+        }
+        if val_acc > best_acc:
+            best_acc = val_acc
+            best_epoch = epoch
+            best_state = {name: value.detach().clone() for name, value in state.items()}
+            best_modulator_state = {
+                name: value.detach().clone() for name, value in modulator.state_dict().items()
+            }
+            save_mod_checkpoint(run_dir / "mod_best.pt", state, modulator, cfg, epoch, metrics)
         print(f"[mod] epoch={epoch} " + " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
     save_mod_checkpoint(run_dir / "mod_last.pt", state, modulator, cfg, cfg.nb_epochs_mod, metrics)
+    if best_state is not None:
+        with torch.no_grad():
+            for name, value in state.items():
+                value.copy_(best_state[name])
+        modulator.load_state_dict(best_modulator_state)
+    if x_test is not None and y_test is not None:
+        test_loss, test_acc = evaluate_modulated(state, cfg, x_test, y_test, modulator)
+        print(f"[mod] selected epoch={best_epoch} | final test loss={test_loss:.4f} | final test acc={test_acc:.4f}")
     return state, modulator

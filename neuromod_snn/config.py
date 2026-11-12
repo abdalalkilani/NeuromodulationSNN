@@ -75,6 +75,7 @@ class ExperimentConfig:
     test_file: str = "shd_test.h5"
     save_dir: str = "runs"
     seed: int = 123
+    val_fraction: float = 0.1
     ann_mode: str = "ann_sub"
     ann_hidden_sizes: List[int] = field(default_factory=lambda: [2048])
     ann_interval: int = 3
